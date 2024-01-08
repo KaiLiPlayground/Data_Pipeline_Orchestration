@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Sets up an EventBridge rule to initiate the Step Function state machine in response to S3 events."
+
+Resources:
+  S3EventToStepFunctionRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: dataeng-s3-trigger-rule
+      EventPattern:
+        source:
+          - "aws.s3"
+        detail-type:
+          - "AWS API Call via CloudTrail"
+        detail:
+          eventSource:
+            - "s3.amazonaws.com"
+          eventName:
+            - "PutObject"
+            - "CopyObject"
+            - "CompleteMultipartUpload"
+          requestParameters:
+            bucketName:
+              - !Ref CleanZoneBucket
+      Targets:
+        - Arn: !Ref StepFunctionArn
+          Id: "StepFunctionTarget"
+          RoleArn: !GetAtt InvocationRole.Arn
+
+  InvocationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "events.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "StepFunctionExecutionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "states:StartExecution"
+                Resource: !Ref StepFunctionArn
+
+Parameters:
+  CleanZoneBucket:
+    Type: String
+    Description: Name of the S3 clean zone bucket to monitor
+
+  StepFunctionArn:
+    Type: String
+    Description: ARN of the Step Function state machine
+
+Outputs:
+  EventBridgeRuleArn:
+    Description: "ARN of the EventBridge Rule"
+    Value: !GetAtt S3EventToStepFunctionRule.Arn
+    Export:
+        Name: EventBridgeRuleArn

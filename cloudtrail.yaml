@@ -1,0 +1,30 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Configures CloudTrail for logging S3 data events to trigger pipeline actions."
+
+Resources:
+  S3DataEventTrail:
+    Type: AWS::CloudTrail::Trail
+    Properties:
+      TrailName: s3-data-events
+      S3BucketName: !Ref CleanZoneBucket
+      IsMultiRegionTrail: false
+      IncludeGlobalServiceEvents: false
+      EventSelectors:
+        - DataResources:
+            - Type: "AWS::S3::Object"
+              Values: 
+                - !Sub "arn:aws:s3:::${CleanZoneBucket}/"
+          IncludeManagementEvents: false
+          ReadWriteType: "Write"
+
+Parameters:
+  CleanZoneBucket:
+    Type: String
+    Description: Name of the S3 clean zone bucket to monitor
+
+Outputs:
+  CloudTrailArn:
+    Description: "ARN of the CloudTrail Trail"
+    Value: !GetAtt S3DataEventTrail.Arn
+    Export:
+        Name: CloudTrailArn

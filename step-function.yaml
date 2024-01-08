@@ -1,0 +1,141 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Establishes a Step Function state machine for orchestrating and managing data pipeline processes."
+
+Parameters:
+  CheckFileExtFunctionArn:
+    Type: String
+    Description: "ARN of dataeng-check-file-ext Lambda Function"
+  RandomFailureGeneratorFunctionArn:
+    Type: String
+    Description: "ARN of dataeng-random-failure-generator Lambda Function"
+  FailureNotificationTopicArn:
+    Type: String
+    Description: "ARN of the SNS Topic for Failure Notifications"
+
+Resources:
+  DataEngStepFunction:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !GetAtt StepFunctionExecutionRole.Arn
+      DefinitionString: 
+        !Sub |
+          {
+            "Comment": "A description of my state machine",
+            "StartAt": "Check File Extension",
+            "States": {
+              "Check File Extension": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::lambda:invoke",
+                "OutputPath": "$.Payload",
+                "Parameters": {
+                  "Payload.$": "$",
+                  "FunctionName": "${CheckFileExtFunctionArn}"
+                },
+                "Retry": [
+                  {
+                    "ErrorEquals": [
+                      "Lambda.ServiceException",
+                      "Lambda.AWSLambdaException",
+                      "Lambda.SdkClientException"
+                    ],
+                    "IntervalSeconds": 2,
+                    "MaxAttempts": 6,
+                    "BackoffRate": 2
+                  }
+                ],
+                "Next": "Choice"
+              },
+              "Choice": {
+                "Type": "Choice",
+                "Choices": [
+                  {
+                    "Variable": "$.file_extension",
+                    "StringMatches": ".csv",
+                    "Next": "Process CSV"
+                  }
+                ],
+                "Default": "Pass - Invalid File Ext"
+              },
+              "Process CSV": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::lambda:invoke",
+                "OutputPath": "$.Payload",
+                "Parameters": {
+                  "Payload.$": "$",
+                  "FunctionName": "${RandomFailureGeneratorFunctionArn}"
+                },
+                "Retry": [
+                  {
+                    "ErrorEquals": [
+                      "Lambda.ServiceException",
+                      "Lambda.AWSLambdaException",
+                      "Lambda.SdkClientException"
+                    ],
+                    "IntervalSeconds": 2,
+                    "MaxAttempts": 6,
+                    "BackoffRate": 2
+                  }
+                ],
+                "Catch": [
+                  {
+                    "ErrorEquals": [
+                      "States.ALL"
+                    ],
+                    "Next": "SNS Publish",
+                    "ResultPath": "$.Payload"
+                  }
+                ],
+                "Next": "Success"
+              },
+              "Success": {
+                "Type": "Succeed"
+              },
+              "Pass - Invalid File Ext": {
+                "Type": "Pass",
+                "Result": {
+                  "Error": "InvalidFileFormat"
+                },
+                "Next": "SNS Publish",
+                "ResultPath": "$.Payload"
+              },
+              "SNS Publish": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::sns:publish",
+                "Parameters": {
+                  "TopicArn": "${FailureNotificationTopicArn}",
+                  "Message.$": "$"
+                },
+                "Next": "Fail"
+              },
+              "Fail": {
+                "Type": "Fail"
+              }
+            }
+          }
+  StepFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [states.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Policies:
+        - PolicyName: StepFunctionLambdaSNSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 'lambda:InvokeFunction'
+                  - 'sns:Publish'
+                Resource: '*'
+
+Outputs:
+  StepFunctionArn:
+    Description: "ARN of the Step Function"
+    Value: !Ref DataEngStepFunction
+    Export:
+        Name: StepFunctionArn

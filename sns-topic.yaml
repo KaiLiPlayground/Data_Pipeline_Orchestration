@@ -1,0 +1,17 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Deploys Lambda functions for file extension checking and random failure generation, including necessary IAM roles."
+
+Resources:
+  DataEngFailureNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: "kailinwork@outlook.com"
+          Protocol: email
+
+Outputs:
+  DataEngFailureNotificationTopicArn:
+    Description: "ARN of the SNS Topic for Failure Notifications"
+    Value: !Ref DataEngFailureNotificationTopic
+    Export:
+      Name: DataEngFailureNotificationTopicArn

@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Deploys Lambda functions for file extension checking and random failure generation, including necessary IAM roles."
+
+Resources:
+  DataEngCheckFileExtFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dataeng-check-file-ext
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Code:
+        ZipFile: |
+          import urllib.parse
+          import os
+          import json
+          print('Loading function')
+          
+          def lambda_handler(event, context):
+              print("Received event: " + json.dumps(event, indent=2))
+              # Get the object from the event and show its content type
+              bucket = event['detail']['requestParameters']['bucketName']
+              key = urllib.parse.unquote_plus(event['detail']['requestParameters']['key'], encoding='utf-8')
+              filename, file_extension = os.path.splitext(key)
+              print(f'File extension is: {file_extension}')
+              payload = {
+                  "file_extension": file_extension,
+                  "bucket": bucket,
+                  "key": key
+                  }
+              return payload
+      Timeout: 60
+
+  DataEngRandomFailureGeneratorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dataeng-random-failure-generator
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Code:
+        ZipFile: |
+          from random import randint
+          def lambda_handler(event, context):
+              print('Processing')
+              value = randint(0, 2)
+              newval = 10 / value
+              print(f'New Value is: {newval}')
+              return(newval)
+      Timeout: 60
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Policies:
+        - PolicyName: LambdaS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                Resource: '*'
+
+Outputs:
+  DataEngCheckFileExtFunctionArn:
+    Description: "ARN of dataeng-check-file-ext Lambda Function"
+    Value: !GetAtt DataEngCheckFileExtFunction.Arn
+    Export:
+        Name: DataEngCheckFileExtFunctionArn
+
+  DataEngRandomFailureGeneratorFunctionArn:
+    Description: "ARN of dataeng-random-failure-generator Lambda Function"
+    Value: !GetAtt DataEngRandomFailureGeneratorFunction.Arn
+    Export:
+        Name: DataEngRandomFailureGeneratorFunctionArn

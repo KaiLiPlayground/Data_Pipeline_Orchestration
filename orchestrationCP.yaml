@@ -1,0 +1,205 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "A pipeline for automated deployment and management of Lambda functions, SNS topics, Step Functions, CloudTrail, and EventBridge rules."
+
+Parameters:
+  CodeCommitRepoName:
+    Type: String
+    Description: Name of the AWS CodeCommit repository
+
+  BucketName:
+    Type: String
+    Default: "dataeng-clean-zone-etl"
+    Description: "The name of the S3 ETL bucket"  
+
+
+Resources:
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineArtifactStore
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                RepositoryName: !Ref CodeCommitRepoName
+                BranchName: main
+
+        - Name: DeployLambdaFunctions
+          Actions:
+            - Name: DeployLambda
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: "LambdaFunctionStack"
+                TemplatePath: "SourceOutput::lambda-functions.yaml"
+                RoleArn: !GetAtt CodePipelineCloudFormationRole.Arn
+                Capabilities: CAPABILITY_IAM
+                OutputVariables:
+                  DataEngCheckFileExtFunctionArn: DataEngCheckFileExtFunctionArn
+                  DataEngRandomFailureGeneratorFunctionArn: DataEngRandomFailureGeneratorFunctionArn
+              InputArtifacts:
+                - Name: SourceOutput
+
+        - Name: DeploySnsTopic
+          Actions:
+            - Name: DeploySns
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: "SnsTopicStack"
+                TemplatePath: "SourceOutput::sns-topic.yaml"
+                Capabilities: CAPABILITY_IAM
+                RoleArn: !GetAtt CodePipelineCloudFormationRole.Arn  
+                OutputVariables:
+                  DataEngFailureNotificationTopicArn: DataEngFailureNotificationTopicArn
+              InputArtifacts:
+                - Name: SourceOutput
+
+        - Name: DeployStepFunction
+          Actions:
+            - Name: DeployStepFunction
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: "StepFunctionStack"
+                TemplatePath: "SourceOutput::step-function.yaml"
+                Capabilities: CAPABILITY_IAM
+                RoleArn: !GetAtt CodePipelineCloudFormationRole.Arn
+                ParameterOverrides: !Sub |
+                  {
+                    CheckFileExtFunctionArn": "#{DeployLambdaFunctions.DataEngCheckFileExtFunctionArn}",
+                    RandomFailureGeneratorFunctionArn": "#{DeployLambdaFunctions.DataEngRandomFailureGeneratorFunctionArn}",
+                    FailureNotificationTopicArn": "#{DeploySnsTopic.DataEngFailureNotificationTopicArn}"
+                  }
+              InputArtifacts:
+                - Name: SourceOutput
+        
+        - Name: DeployCloudTrail
+          Actions:
+            - Name: DeployCloudTrail
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: "CloudTrailStack"
+                TemplatePath: "SourceOutput::cloudtrail.yaml"
+                Capabilities: CAPABILITY_IAM
+                RoleArn: !GetAtt CodePipelineCloudFormationRole.Arn  
+                ParameterOverrides: !Sub |
+                  {
+                    "CleanZoneBucket": "${BucketName}"
+                  }
+              InputArtifacts:
+                - Name: SourceOutput
+
+        - Name: DeployEventBridgeRule
+          Actions:
+            - Name: DeployEventBridge
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: "EventBridgeRuleStack"
+                TemplatePath: "SourceOutput::eventbridge-rule.yaml"
+                Capabilities: CAPABILITY_IAM
+                RoleArn: !GetAtt CodePipelineCloudFormationRole.Arn  # Add this line
+                ParameterOverrides: !Sub |
+                  {
+                    "CleanZoneBucket": "${BucketName}"
+                  }
+              InputArtifacts:
+                - Name: SourceOutput
+
+  # Define the CodePipelineCloudFormationRole
+  CodePipelineCloudFormationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [cloudformation.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Policies:
+        - PolicyName: CodePipelineCloudFormationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                   - 'cloudformation:*'
+                   - 'lambda:*'
+                   - 'sns:*'
+                   - 'states:*'
+                   - 'iam:*' # This grants full access to IAM resources, adjust as needed
+                Resource: '*'
+
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [codepipeline.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Policies:
+        - PolicyName: CodePipelineAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 'codecommit:*'
+                  - 's3:*'
+                  - 'codebuild:*'
+                  - 'cloudformation:*'
+                Resource: '*'
+              - Effect: Allow
+                Action: 'iam:PassRole'
+                Resource: !GetAtt CodePipelineCloudFormationRole.Arn
+                # The above line references the ARN of the CloudFormation role
+                # Ensure you have the correct reference to the CloudFormation role
+
+  CodePipelineArtifactStore:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+Outputs:
+  PipelineName:
+    Description: "Name of the CodePipeline"
+    Value: !Ref CodePipeline
